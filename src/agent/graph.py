@@ -88,13 +88,12 @@ def get_azure_tracer() -> Any:
             return None
         try:
             from langchain_azure_ai.callbacks.tracers import (  # type: ignore[import-untyped]
-                AzureAIOpenTelemetryTracer,
+                AzureAIInferenceTracer,
             )
 
-            _AZURE_TRACER = AzureAIOpenTelemetryTracer(
+            _AZURE_TRACER = AzureAIInferenceTracer(
                 connection_string=connection_string,
                 enable_content_recording=True,
-                name="issue-triager-agent",
             )
             logger.info("Azure AI OpenTelemetry tracer initialized successfully.")
         except Exception as exc:  # noqa: BLE001
