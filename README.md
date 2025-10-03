@@ -93,6 +93,16 @@ LANGSMITH_API_KEY="<your_langsmith_api_key>"
 LANGSMITH_PROJECT="<your_project_name>"
 ```
 
+## Configuring Azure AI tracing (optional)
+
+This project supports Azure AI OpenTelemetry tracing through the `langchain-azure-ai[opentelemetry]` package. To enable Azure AI tracing, set the `APPLICATION_INSIGHTS_CONNECTION_STRING` environment variable in your shell or in the `.env` file:
+
+```bash
+APPLICATION_INSIGHTS_CONNECTION_STRING="InstrumentationKey=...;IngestionEndpoint=..."
+```
+
+When configured, the agent will automatically trace all LLM calls and agent executions to Azure Application Insights, providing detailed observability into the agent's behavior.
+
 ## Running the triager
 
 This project uses `uv` and LangGraph’s dev server.

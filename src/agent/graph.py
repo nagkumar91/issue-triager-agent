@@ -5,6 +5,7 @@ With a human-in-the-loop review step using Agent Inbox-compatible interrupts.
 Environment variables used:
 - GITHUB_TOKEN: Required for GitHub Models and the GitHub GraphQL API.
 - TARGET_REPO: Optional. Full repo (e.g. "owner/name").
+- APPLICATION_INSIGHTS_CONNECTION_STRING: Optional. Azure Application Insights connection string for OpenTelemetry tracing.
 - Model selection:
     - API_HOST: "github" (default) or "azure".
     - When API_HOST=github: GITHUB_MODEL (default: "gpt-4o").
@@ -46,6 +47,9 @@ load_dotenv(override=True)
 
 logger = logging.getLogger(__name__)
 
+# Lazy-init Azure AI tracer (optional feature)
+_AZURE_TRACER: Any = None
+
 
 # Jinja2 environment shared by all templates
 _jinja_env = Environment(
@@ -66,6 +70,36 @@ def get_client() -> GitHubClient:
     if _GH_CLIENT is None:
         _GH_CLIENT = GitHubClient()
     return _GH_CLIENT
+
+
+def get_azure_tracer() -> Any:
+    """Return an optional AzureAIOpenTelemetryTracer instance if configured.
+
+    Uses the APPLICATION_INSIGHTS_CONNECTION_STRING environment variable.
+    Returns None if not configured or if import fails.
+    """
+    global _AZURE_TRACER
+    if _AZURE_TRACER is None:
+        connection_string = os.getenv("APPLICATION_INSIGHTS_CONNECTION_STRING")
+        if not connection_string:
+            logger.info(
+                "APPLICATION_INSIGHTS_CONNECTION_STRING not set; Azure AI tracing disabled."
+            )
+            return None
+        try:
+            from langchain_azure_ai.callbacks.tracers import (  # type: ignore[import-untyped]
+                AzureAIInferenceTracer,
+            )
+
+            _AZURE_TRACER = AzureAIInferenceTracer(
+                connection_string=connection_string,
+                enable_content_recording=True,
+            )
+            logger.info("Azure AI OpenTelemetry tracer initialized successfully.")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to initialize Azure AI tracer: %s", exc)
+            return None
+    return _AZURE_TRACER
 
 
 # Helper to fetch labels via a shared client instance (no module-level cache needed now)
@@ -444,6 +478,20 @@ async def research_issue_node(state: State, config: RunnableConfig) -> dict[str,
         },
     }
 
+    # Add Azure AI tracer if configured
+    azure_tracer = get_azure_tracer()
+    if azure_tracer:
+        existing_callbacks = merged_config.get("callbacks")
+        if existing_callbacks is None:
+            merged_config["callbacks"] = [azure_tracer]
+        elif isinstance(existing_callbacks, list):
+            merged_config["callbacks"] = existing_callbacks + [azure_tracer]
+        else:
+            # BaseCallbackManager - keep as is and log warning
+            logger.warning(
+                "Cannot add Azure tracer: callbacks is BaseCallbackManager, not a list"
+            )
+
     result = await agent.ainvoke(
         {"messages": [("human", prompt)]}, config=merged_config
     )
@@ -467,9 +515,9 @@ async def propose_action_node(state: State, config: RunnableConfig) -> dict[str,
     Uses a second LLM call with structured output (Option 2 pattern from docs).
     """
     assert state.issue is not None, "Issue must be selected before proposal."
-    assert (
-        state.research_summary is not None
-    ), "Research summary required before proposal."
+    assert state.research_summary is not None, (
+        "Research summary required before proposal."
+    )
     issue = state.issue
     research_summary = state.research_summary
     model = _build_llm()
@@ -495,11 +543,18 @@ async def propose_action_node(state: State, config: RunnableConfig) -> dict[str,
         f"Labels: {', '.join(issue['labels']) if issue.get('labels') else '(none)'}\n\n"
         "Research summary:\n" + research_summary
     )
+    # Add Azure AI tracer if configured
+    invoke_config: RunnableConfig = {}
+    azure_tracer = get_azure_tracer()
+    if azure_tracer:
+        invoke_config["callbacks"] = [azure_tracer]
+
     response: ProposalModel = structured.invoke(
         [
             ("system", system_prompt),
             ("human", user_content),
-        ]
+        ],
+        config=invoke_config,
     )
     proposal_dict = response.model_dump()
     return {"proposal": proposal_dict}
